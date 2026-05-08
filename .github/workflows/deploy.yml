@@ -1,4 +1,27 @@
-name: Build & Deploy CRM API
+# ═══════════════════════════════════════════════════════════
+# Oros Platform — CI/CD Pipeline (Python Service)
+# Place in repo: .github/workflows/deploy.yml
+#
+# DEVOPS SETUP:
+#   1. Change SERVICE_NAME, SERVICE_PORT, SERVICE_DB below
+#   2. Change REGISTRY_OWNER to the GitHub username or org
+#      that owns this repo (must be lowercase)
+#   3. Add repo secrets: VPS_HOST, VPS_SSH_KEY
+#   4. Ensure developer has a Dockerfile in their repo
+#
+# EXPECTED REPO STRUCTURE:
+#   repo/
+#   ├── .github/workflows/deploy.yml  ← This file
+#   ├── Dockerfile
+#   ├── requirements.txt
+#   ├── src/
+#   │   └── app.py
+#   ├── tests/
+#   │   └── test_app.py
+#   └── .gitignore
+# ═══════════════════════════════════════════════════════════
+
+name: Build & Deploy
 
 on:
   push:
@@ -7,11 +30,13 @@ on:
     branches: [main]
 
 env:
-  SERVICE_NAME: crm-api
-  SERVICE_PORT: 5001
-  SERVICE_DB: oros_crm
+  SERVICE_NAME: crm-api           # ← Change per service (e.g., crm-api, cba-api, cbss-api)
+  SERVICE_PORT: 5001              # ← Change per service (see PORT_ASSIGNMENTS.md)
+  SERVICE_DB: oros_crm            # ← Change per service (e.g., oros_crm, oros_cba, oros_cbss)
+  REGISTRY_OWNER: taiwo-peter     # ← Change to GitHub username/org (MUST be lowercase)
 
 jobs:
+  # ── Gate 1: Test ──────────────────────────
   test:
     runs-on: ubuntu-latest
     services:
@@ -48,9 +73,10 @@ jobs:
           DATABASE_URL: postgresql://test_user:test_pass@localhost:5432/test_db
           REDIS_URL: redis://localhost:6379/0
           KAFKA_BOOTSTRAP_SERVERS: localhost:9092
-          SERVICE_NAME: crm-api
+          SERVICE_NAME: ${{ env.SERVICE_NAME }}
         run: python -m pytest tests/ -v --tb=short
 
+  # ── Gate 2: Build & Push Image ────────────
   build:
     needs: test
     runs-on: ubuntu-latest
@@ -74,9 +100,10 @@ jobs:
           context: .
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/oros-${{ env.SERVICE_NAME }}:latest
-            ghcr.io/${{ github.repository_owner }}/oros-${{ env.SERVICE_NAME }}:${{ github.sha }}
+            ghcr.io/${{ env.REGISTRY_OWNER }}/oros-${{ env.SERVICE_NAME }}:latest
+            ghcr.io/${{ env.REGISTRY_OWNER }}/oros-${{ env.SERVICE_NAME }}:${{ github.sha }}
 
+  # ── Gate 3: Deploy to VM ──────────────────
   deploy:
     needs: build
     runs-on: ubuntu-latest
@@ -88,11 +115,11 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: root
           key: ${{ secrets.VPS_SSH_KEY }}
-          envs: SERVICE_NAME,SERVICE_PORT,SERVICE_DB
+          envs: SERVICE_NAME,SERVICE_PORT,SERVICE_DB,REGISTRY_OWNER
           script: |
             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-            docker pull ghcr.io/${{ github.repository_owner }}/oros-${SERVICE_NAME}:latest
+            docker pull ghcr.io/${REGISTRY_OWNER}/oros-${SERVICE_NAME}:latest
 
             docker stop oros-${SERVICE_NAME} 2>/dev/null || true
             docker rm oros-${SERVICE_NAME} 2>/dev/null || true
@@ -110,7 +137,7 @@ jobs:
               -e KAFKA_BOOTSTRAP_SERVERS=oros-kafka:9092 \
               -e KEYCLOAK_URL=http://oros-keycloak:8080 \
               -e KEYCLOAK_REALM=oros \
-              ghcr.io/${{ github.repository_owner }}/oros-${SERVICE_NAME}:latest
+              ghcr.io/${REGISTRY_OWNER}/oros-${SERVICE_NAME}:latest
 
             sleep 10
-            curl -sf http://localhost:${SERVICE_PORT}/health && echo "CRM API deployed successfully" || echo "Health check failed"
+            curl -sf http://localhost:${SERVICE_PORT}/health && echo "Deployed successfully" || echo "Health check failed"
